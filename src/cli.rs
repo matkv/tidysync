@@ -19,4 +19,7 @@ pub struct CLI {
 #[derive(Subcommand)]
 pub enum Command {
     Ping,
+    Status,
+    Folders,
+    Devices,
 }
