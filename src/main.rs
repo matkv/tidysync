@@ -5,6 +5,7 @@ use crate::{cli::CLI, client::SyncThingClient};
 
 mod cli;
 mod client;
+mod types;
 
 #[tokio::main]
 async fn main() -> Result<()> {
