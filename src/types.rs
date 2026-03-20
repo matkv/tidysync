@@ -23,3 +23,25 @@ pub struct Folder {
     pub label: String,
     pub path: String,
 }
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemFinishedData {
+    pub folder: String,
+    pub item: String,
+    pub action: String,
+    pub error: Option<String>,
+    #[serde(rename = "type")]
+    pub item_type: String, // "file" or "dir"
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemFinishedEvent {
+    // TODO add a general one for all events
+    pub id: u64,
+    pub global_id: u64,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub data: ItemFinishedData,
+}

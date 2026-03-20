@@ -1,3 +1,5 @@
+use core::sync;
+
 use anyhow::Result;
 use clap::Parser;
 
@@ -36,6 +38,10 @@ async fn main() -> Result<()> {
             for device in devices {
                 println!("ID: {}, Name: {}", device.device_id, device.name);
             }
+        }
+        cli::Command::Watch => {
+            println!("Watching for ItemFinished events...");
+            syncthing.watch_item_finished().await?;
         }
     }
     Ok(())

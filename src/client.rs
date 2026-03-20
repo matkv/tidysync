@@ -1,4 +1,4 @@
-use crate::types::{Device, Folder, SystemStatus};
+use crate::types::{Device, Folder, ItemFinishedEvent, SystemStatus};
 use anyhow::Result;
 use reqwest::Client;
 
@@ -70,5 +70,39 @@ impl SyncThingClient {
             .json::<Vec<Device>>()
             .await?;
         Ok(devices)
+    }
+
+    pub async fn watch_item_finished(&self) -> Result<()> {
+        let mut since: u64 = 0;
+
+        loop {
+            let url = format!(
+                "{}/rest/events?events=ItemFinished&since={}",
+                self.base_url, since
+            );
+            let events = self
+                .client
+                .get(&url)
+                .header("X-API-Key", &self.api_key)
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Vec<ItemFinishedEvent>>()
+                .await?;
+
+            for event in &events {
+                println!(
+                    "[{}] {}/{} — {}",
+                    event.data.action,
+                    event.data.folder,
+                    event.data.item,
+                    event.data.error.as_deref().unwrap_or("ok")
+                );
+            }
+
+            if let Some(last) = events.last() {
+                since = last.id;
+            }
+        }
     }
 }

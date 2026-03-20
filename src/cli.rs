@@ -22,4 +22,5 @@ pub enum Command {
     Status,
     Folders,
     Devices,
+    Watch,
 }
