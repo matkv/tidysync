@@ -13,7 +13,7 @@ pub struct CLI {
     #[arg(long, env = "SYNCTHING_API_KEY")]
     pub api_key: String,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]

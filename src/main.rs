@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use crate::{cli::CLI, client::SyncThingClient};
 
@@ -12,7 +12,13 @@ async fn main() -> Result<()> {
     let args = CLI::parse();
     let syncthing = SyncThingClient::new(args.url, args.api_key);
 
-    match args.command {
+    let Some(command) = &args.command else {
+        CLI::command().print_help()?;
+        println!();
+        return Ok(());
+    };
+
+    match command {
         cli::Command::Ping => {
             syncthing.ping().await?;
             println!("Syncthing is responsive!");
