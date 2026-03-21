@@ -25,6 +25,23 @@ pub struct Folder {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum EventData {
+    ItemFinished(ItemFinishedData),
+    Other(serde_json::Value), // For events we don't specifically handle yet
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncThingEvent {
+    pub id: u64,
+    pub global_id: Option<u64>,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub data: EventData,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemFinishedData {
     pub folder: String,
@@ -33,15 +50,4 @@ pub struct ItemFinishedData {
     pub error: Option<String>,
     #[serde(rename = "type")]
     pub item_type: String, // "file" or "dir"
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ItemFinishedEvent {
-    // TODO add a general one for all events
-    pub id: u64,
-    pub global_id: Option<u64>,
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub data: ItemFinishedData,
 }

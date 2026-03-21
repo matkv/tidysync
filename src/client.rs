@@ -1,4 +1,4 @@
-use crate::types::{Device, Folder, ItemFinishedEvent, SystemStatus};
+use crate::types::{Device, Folder, SyncThingEvent, SystemStatus};
 use anyhow::{Context, Result};
 use reqwest::Client;
 
@@ -100,18 +100,20 @@ impl SyncThingClient {
                 .context("failed to reach /rest/events")?
                 .error_for_status()
                 .context("Syncthing returned an error on events endpoint")?
-                .json::<Vec<ItemFinishedEvent>>()
+                .json::<Vec<SyncThingEvent>>()
                 .await
                 .context("failed to parse ItemFinished events")?;
 
             for event in &events {
-                println!(
-                    "[{}] {}/{} — {}",
-                    event.data.action,
-                    event.data.folder,
-                    event.data.item,
-                    event.data.error.as_deref().unwrap_or("ok")
-                );
+                if let crate::types::EventData::ItemFinished(data) = &event.data {
+                    println!(
+                        "[{}] {}/{} — {}",
+                        data.action,
+                        data.folder,
+                        data.item,
+                        data.error.as_deref().unwrap_or("ok")
+                    );
+                }
             }
 
             if let Some(last) = events.last() {
