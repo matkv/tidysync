@@ -1,5 +1,5 @@
 use crate::types::{Device, Folder, ItemFinishedEvent, SystemStatus};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use reqwest::Client;
 
 pub struct SyncThingClient {
@@ -24,8 +24,10 @@ impl SyncThingClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .context("failed to reach /rest/system/ping")?
+            .error_for_status()
+            .context("Syncthing returned an error on ping")?;
 
         Ok(())
     }
@@ -37,10 +39,13 @@ impl SyncThingClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .context("failed to reach /rest/system/status")?
+            .error_for_status()
+            .context("Syncthing returned an error on system/status")?
             .json::<SystemStatus>()
-            .await?;
+            .await
+            .context("failed to parse SystemStatus response")?;
         Ok(status)
     }
 
@@ -51,10 +56,13 @@ impl SyncThingClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .context("failed to reach /rest/config/folders")?
+            .error_for_status()
+            .context("Syncthing returned an error on config/folders")?
             .json::<Vec<Folder>>()
-            .await?;
+            .await
+            .context("failed to parse folders list")?;
         Ok(folders)
     }
 
@@ -65,10 +73,13 @@ impl SyncThingClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .context("failed to reach /rest/config/devices")?
+            .error_for_status()
+            .context("Syncthing returned an error on config/devices")?
             .json::<Vec<Device>>()
-            .await?;
+            .await
+            .context("failed to parse devices list")?;
         Ok(devices)
     }
 
@@ -85,10 +96,13 @@ impl SyncThingClient {
                 .get(&url)
                 .header("X-API-Key", &self.api_key)
                 .send()
-                .await?
-                .error_for_status()?
+                .await
+                .context("failed to reach /rest/events")?
+                .error_for_status()
+                .context("Syncthing returned an error on events endpoint")?
                 .json::<Vec<ItemFinishedEvent>>()
-                .await?;
+                .await
+                .context("failed to parse ItemFinished events")?;
 
             for event in &events {
                 println!(
