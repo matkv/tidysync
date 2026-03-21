@@ -40,7 +40,7 @@ pub struct ItemFinishedData {
 pub struct ItemFinishedEvent {
     // TODO add a general one for all events
     pub id: u64,
-    pub global_id: u64,
+    pub global_id: Option<u64>,
     #[serde(rename = "type")]
     pub event_type: String,
     pub data: ItemFinishedData,
