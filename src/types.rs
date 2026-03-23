@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -42,12 +44,37 @@ pub struct SyncThingEvent {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemAction {
+    Update,
+    Delete,
+    Metadata,
+}
+
+impl Display for ItemAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ItemAction::Update => write!(f, "update"),
+            ItemAction::Delete => write!(f, "delete"),
+            ItemAction::Metadata => write!(f, "metadata"),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemType {
+    File,
+    Directory,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemFinishedData {
     pub folder: String,
     pub item: String,
-    pub action: String,
+    pub action: ItemAction,
     pub error: Option<String>,
     #[serde(rename = "type")]
-    pub item_type: String, // "file" or "dir"
+    pub item_type: ItemType,
 }
