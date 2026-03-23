@@ -2,24 +2,24 @@ use std::fmt::Display;
 
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SystemStatus {
     #[serde(rename = "myID")]
     pub my_id: String,
     pub uptime: u64,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Device {
     #[serde(rename = "deviceID")]
     pub device_id: String,
     pub name: String,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Folder {
     pub id: String,
     pub label: String,
@@ -33,8 +33,14 @@ pub enum EventData {
     Other(serde_json::Value), // For events we don't specifically handle yet
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+impl Default for EventData {
+    fn default() -> Self {
+        EventData::Other(serde_json::Value::Null)
+    }
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SyncThingEvent {
     pub id: u64,
     pub global_id: Option<u64>,
@@ -43,9 +49,10 @@ pub struct SyncThingEvent {
     pub data: EventData,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ItemAction {
+    #[default]
     Update,
     Delete,
     Metadata,
@@ -61,15 +68,16 @@ impl Display for ItemAction {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ItemType {
+    #[default]
     File,
     Directory,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ItemFinishedData {
     pub folder: String,
     pub item: String,
