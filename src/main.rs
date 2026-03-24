@@ -1,10 +1,11 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 
-use crate::{cli::CLI, client::SyncThingClient};
+use crate::{cli::CLI, client::SyncThingClient, config::Config};
 
 mod cli;
 mod client;
+mod config;
 mod types;
 
 #[tokio::main]
