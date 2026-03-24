@@ -56,10 +56,8 @@ async fn main() -> Result<()> {
             );
 
             syncthing
-                .watch_item_finished(&config.source_folder_id)
+                .watch_item_finished(&config.source_folder_id, &config.target_directory)
                 .await?;
-
-            println!("Moving files to {}", config.target_directory.display());
         }
         cli::Command::Config => {
             let config = Config::load(args.config.as_deref(), &syncthing).await?; // TODO check what as_deref does

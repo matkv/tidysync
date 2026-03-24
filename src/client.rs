@@ -83,7 +83,11 @@ impl SyncThingClient {
         Ok(devices)
     }
 
-    pub async fn watch_item_finished(&self) -> Result<()> {
+    pub async fn watch_item_finished(
+        &self,
+        source_folder_id: &str,
+        target_directory: &std::path::Path,
+    ) -> Result<()> {
         let mut since: u64 = 0;
 
         loop {
@@ -106,12 +110,28 @@ impl SyncThingClient {
 
             for event in &events {
                 if let crate::types::EventData::ItemFinished(data) = &event.data {
+                    if data.folder != source_folder_id {
+                        continue; // skip events from other folders
+                    }
+
+                    // some error while syncing the item, skip it and print the error
+                    if data.error.is_some() {
+                        println!(
+                            "[{}] {} — skipping (error: {})",
+                            data.folder,
+                            data.item,
+                            data.error.as_deref().unwrap()
+                        );
+                        continue;
+                    }
+
+                    // print everything and where the file will be moved to
                     println!(
-                        "[{}] {}/{} — {}",
-                        data.action,
+                        "[{}] {} {} — moving to {}",
                         data.folder,
                         data.item,
-                        data.error.as_deref().unwrap_or("ok")
+                        data.action,
+                        target_directory.join(&data.item).display()
                     );
                 }
             }
