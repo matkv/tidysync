@@ -85,7 +85,7 @@ impl Config {
             .context("failed to read target directory from stdin")?;
 
         let config = Config {
-            source_folder_id: folder_id,
+            source_folder_id: folder_id.trim().to_string(),
             target_directory: PathBuf::from(target.trim()),
         };
 
@@ -97,7 +97,7 @@ impl Config {
         // serialize config to TOML and write to file
         let toml_str =
             toml::to_string_pretty(&config).context("failed to serialize config to TOML")?;
-        fs::write(config_path, toml_str).context("failed to write config file");
+        fs::write(config_path, toml_str).context("failed to write config file")?;
 
         println!("Config file created at {}", config_path.display());
         Ok(config)
