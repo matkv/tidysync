@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -12,6 +14,8 @@ pub struct CLI {
     pub url: String,
     #[arg(long, env = "SYNCTHING_API_KEY")]
     pub api_key: String,
+    #[arg(long, value_name = "CONFIG_PATH")]
+    pub config: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -23,4 +27,5 @@ pub enum Command {
     Folders,
     Devices,
     Watch,
+    Config,
 }

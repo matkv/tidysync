@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 
 use crate::{cli::CLI, client::SyncThingClient, config::Config};
@@ -45,8 +45,27 @@ async fn main() -> Result<()> {
             }
         }
         cli::Command::Watch => {
-            println!("Watching for ItemFinished events...");
-            syncthing.watch_item_finished().await?;
+            let config = Config::load(args.config.as_deref(), &syncthing).await?;
+
+            std::fs::create_dir_all(&config.target_directory)
+                .context("failed to create target directory if it doesn't exist")?;
+
+            println!(
+                "Watching for changes in folder ID: {}",
+                config.source_folder_id
+            );
+
+            syncthing
+                .watch_item_finished(&config.source_folder_id)
+                .await?;
+
+            println!("Moving files to {}", config.target_directory.display());
+        }
+        cli::Command::Config => {
+            let config = Config::load(args.config.as_deref(), &syncthing).await?; // TODO check what as_deref does
+            println!("Current config:");
+            println!("Source folder ID: {}", config.source_folder_id);
+            println!("Target directory: {}", config.target_directory.display());
         }
     }
     Ok(())
