@@ -27,10 +27,32 @@ pub struct Folder {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct DeviceConnectedData {
+    pub id: String,
+    pub addr: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct DeviceDisconnectedData {
+    pub id: String,
+    pub error: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct DevicePauseResumeData {
+    pub device: String,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum EventData {
-    ItemFinished(ItemFinishedData),
-    Other(serde_json::Value), // For events we don't specifically handle yet
+    // Order matters for untagged: each variant's required fields must not overlap
+    // with those of later variants.
+    DeviceConnected(DeviceConnectedData), // unique: requires "addr"
+    DeviceDisconnected(DeviceDisconnectedData), // unique: requires "error" + "id"
+    DevicePauseOrResume(DevicePauseResumeData), // unique: requires "device"
+    ItemFinished(ItemFinishedData),       // requires "folder" + "item"
+    Other(serde_json::Value),
 }
 
 impl Default for EventData {
@@ -76,8 +98,8 @@ pub enum ItemType {
     Directory,
 }
 
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemFinishedData {
     pub folder: String,
     pub item: String,

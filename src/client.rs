@@ -83,16 +83,30 @@ impl SyncThingClient {
         Ok(devices)
     }
 
-    pub async fn watch_item_finished(
+    pub async fn watch_events(
         &self,
         source_folder_id: &str,
         target_directory: &std::path::Path,
     ) -> Result<()> {
         let mut since: u64 = 0;
 
+        let devices = self
+            .devices()
+            .await
+            .context("failed to fetch device list")?;
+        let device_names: std::collections::HashMap<String, String> =
+            devices.into_iter().map(|d| (d.device_id, d.name)).collect();
+
+        let device_label = |id: &str| -> String {
+            match device_names.get(id) {
+                Some(name) if !name.is_empty() => name.clone(),
+                _ => id.to_string(),
+            }
+        };
+
         loop {
             let url = format!(
-                "{}/rest/events?events=ItemFinished&since={}",
+                "{}/rest/events?events=ItemFinished,DeviceConnected,DeviceDisconnected,DevicePaused,DeviceResumed&since={}",
                 self.base_url, since
             );
             let events = self
@@ -106,9 +120,27 @@ impl SyncThingClient {
                 .context("Syncthing returned an error on events endpoint")?
                 .json::<Vec<SyncThingEvent>>()
                 .await
-                .context("failed to parse ItemFinished events")?;
+                .context("failed to parse events")?;
 
             for event in &events {
+                match &event.data {
+                    crate::types::EventData::DeviceConnected(data) => {
+                        println!("Device connected: {}", device_label(&data.id));
+                    }
+                    crate::types::EventData::DeviceDisconnected(data) => {
+                        println!("Device disconnected: {}", device_label(&data.id));
+                    }
+                    crate::types::EventData::DevicePauseOrResume(data) => {
+                        match event.event_type.as_str() {
+                            "DevicePaused" => {
+                                println!("Device paused: {}", device_label(&data.device))
+                            }
+                            _ => println!("Device resumed: {}", device_label(&data.device)),
+                        }
+                    }
+                    _ => {}
+                }
+
                 if let crate::types::EventData::ItemFinished(data) = &event.data {
                     if data.folder != source_folder_id {
                         continue; // skip events from other folders

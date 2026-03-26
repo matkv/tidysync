@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
             );
 
             syncthing
-                .watch_item_finished(&config.source_folder_id, &config.target_directory)
+                .watch_events(&config.source_folder_id, &config.target_directory)
                 .await?;
         }
         cli::Command::Config => {
