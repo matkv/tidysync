@@ -83,13 +83,34 @@ impl SyncThingClient {
         Ok(devices)
     }
 
+    async fn latest_event_id(&self) -> Result<u64> {
+        // Fetch the most recent event using the same filter as the main loop.
+        // The event IDs are per-filter, so mixing filters would give us an ID
+        // from a different sequence and cause the main loop to miss events or block.
+        let url = format!(
+            "{}/rest/events?since=0&limit=1&events=ItemFinished,DeviceConnected,DeviceDisconnected,DevicePaused,DeviceResumed",
+            self.base_url
+        );
+        let events = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("failed to reach /rest/events for seeding")?
+            .error_for_status()
+            .context("Syncthing returned an error while seeding event cursor")?
+            .json::<Vec<SyncThingEvent>>()
+            .await
+            .context("failed to parse seed events")?;
+        Ok(events.last().map(|e| e.id).unwrap_or(0))
+    }
+
     pub async fn watch_events(
         &self,
         source_folder_id: &str,
         target_directory: &std::path::Path,
     ) -> Result<()> {
-        let mut since: u64 = 0;
-
         let devices = self
             .devices()
             .await
@@ -103,6 +124,8 @@ impl SyncThingClient {
                 _ => id.to_string(),
             }
         };
+
+        let mut since: u64 = self.latest_event_id().await?;
 
         loop {
             let url = format!(
