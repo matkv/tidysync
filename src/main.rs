@@ -48,12 +48,20 @@ async fn main() -> Result<()> {
         cli::Command::Watch => {
             let config = Config::load(args.config.as_deref(), &syncthing).await?;
 
+            if !config.target_directory.is_absolute() {
+                anyhow::bail!(
+                    "target directory must be an absolute path, got: {}",
+                    config.target_directory.display()
+                );
+            }
+
             std::fs::create_dir_all(&config.target_directory)
-                .context("failed to create target directory if it doesn't exist")?;
+                .context("failed to create target directory")?;
 
             println!(
-                "Watching for changes in folder ID: {}",
-                config.source_folder_id
+                "Watching for changes in folder ID: {}, moving files to: {}",
+                config.source_folder_id,
+                config.target_directory.display()
             );
 
             syncthing

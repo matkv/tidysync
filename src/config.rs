@@ -84,9 +84,17 @@ impl Config {
             .read_line(&mut target)
             .context("failed to read target directory from stdin")?;
 
+        let target_path = PathBuf::from(target.trim());
+        if !target_path.is_absolute() {
+            bail!(
+                "Target directory must be an absolute path, got: {}",
+                target_path.display()
+            );
+        }
+
         let config = Config {
             source_folder_id: folder_id.trim().to_string(),
-            target_directory: PathBuf::from(target.trim()),
+            target_directory: target_path,
         };
 
         // check if config directory exists (~/.config/tidysync), if not create it
