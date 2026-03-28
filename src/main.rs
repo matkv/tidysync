@@ -6,6 +6,7 @@ use crate::{cli::CLI, client::SyncThingClient, config::Config};
 mod cli;
 mod client;
 mod config;
+mod mover;
 mod types;
 
 #[tokio::main]

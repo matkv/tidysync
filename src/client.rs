@@ -1,4 +1,7 @@
-use crate::types::{Device, Folder, SyncThingEvent, SystemStatus};
+use crate::{
+    mover,
+    types::{Device, Folder, SyncThingEvent, SystemStatus},
+};
 use anyhow::{Context, Result};
 use reqwest::Client;
 
@@ -115,6 +118,12 @@ impl SyncThingClient {
             .devices()
             .await
             .context("failed to fetch device list")?;
+
+        let folders = self
+            .folders()
+            .await
+            .context("failed to fetch folder list")?;
+
         let device_names: std::collections::HashMap<String, String> =
             devices.into_iter().map(|d| (d.device_id, d.name)).collect();
 
@@ -180,14 +189,25 @@ impl SyncThingClient {
                         continue;
                     }
 
-                    // print everything and where the file will be moved to
-                    println!(
-                        "[{}] {} {} — moving to {}",
-                        data.folder,
-                        data.item,
-                        data.action,
-                        target_directory.join(&data.item).display()
-                    );
+                    let folder_root = folders
+                        .iter()
+                        .find(|f| f.id == data.folder)
+                        .map(|f| &f.path)
+                        .context("received event for unknown folder")?;
+
+                    let source = std::path::Path::new(folder_root).join(&data.item);
+                    let destination = target_directory.join(&data.item);
+
+                    // move the file to the target directory
+                    mover::move_file(&source, &destination)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to move file {} to {}",
+                                data.item,
+                                destination.display()
+                            )
+                        })?;
                 }
             }
 
