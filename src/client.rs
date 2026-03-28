@@ -195,7 +195,15 @@ impl SyncThingClient {
                         .map(|f| &f.path)
                         .context("received event for unknown folder")?;
 
-                    let source = std::path::Path::new(folder_root).join(&data.item);
+                    let expanded_root = if let Some(rest) = folder_root.strip_prefix("~/") {
+                        let home =
+                            dirs::home_dir().context("could not determine home directory")?;
+                        home.join(rest)
+                    } else {
+                        std::path::PathBuf::from(folder_root)
+                    };
+
+                    let source = expanded_root.join(&data.item);
                     let destination = target_directory.join(&data.item);
 
                     // move the file to the target directory
