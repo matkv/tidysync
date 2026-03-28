@@ -9,9 +9,12 @@
       "type": "lldb",
       "request": "launch",
       "cargo": {
-        "args": ["run", "--bin=tidysync"]
+        "args": ["build", "--bin=tidysync"]
       },
-      "args": ["watch"]
+      "args": ["--api-key", "${env:SYNCTHING_API_KEY}", "watch"],
+      "env": {
+        "RUST_BACKTRACE": "1"
+      }
     },
     {
       "name": "Debug unit tests in executable 'tidysync'",
