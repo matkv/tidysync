@@ -12,3 +12,4 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 toml = "0.8"
 dirs = "5"
+walkdir = "2"

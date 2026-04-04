@@ -134,6 +134,34 @@ impl SyncThingClient {
             }
         };
 
+        // Pre-scan: move files that already exist in the source folder before
+        // we start watching for new events.
+        let source_folder = folders
+            .iter()
+            .find(|f| f.id == source_folder_id)
+            .with_context(|| {
+                format!(
+                    "source folder '{}' not found in Syncthing config",
+                    source_folder_id
+                )
+            })?;
+
+        let expanded_root = if let Some(rest) = source_folder.path.strip_prefix("~/") {
+            let home = dirs::home_dir().context("could not determine home directory")?;
+            home.join(rest)
+        } else {
+            std::path::PathBuf::from(&source_folder.path)
+        };
+
+        println!(
+            "Scanning for existing files in {}...",
+            expanded_root.display()
+        );
+        mover::move_existing_files(&expanded_root, target_directory)
+            .await
+            .context("pre-scan move failed")?;
+        println!("Pre-scan complete. Watching for new events...");
+
         let mut since: u64 = self.latest_event_id().await?;
 
         loop {
