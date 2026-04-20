@@ -3,6 +3,7 @@ use crate::{
     types::{Device, Folder, SyncThingEvent, SystemStatus},
 };
 use anyhow::{Context, Result};
+use chrono::Local;
 use reqwest::Client;
 
 pub struct SyncThingClient {
@@ -160,7 +161,7 @@ impl SyncThingClient {
         mover::move_existing_files(&expanded_root, target_directory)
             .await
             .context("pre-scan move failed")?;
-        println!("Pre-scan complete. Watching for new events...");
+        println!("[{}] Pre-scan complete. Watching for new events...", Local::now().format("%H:%M:%S"));
 
         let mut since: u64 = self.latest_event_id().await?;
 
@@ -185,17 +186,17 @@ impl SyncThingClient {
             for event in &events {
                 match &event.data {
                     crate::types::EventData::DeviceConnected(data) => {
-                        println!("Device connected: {}", device_label(&data.id));
+                        println!("[{}] Device connected: {}", Local::now().format("%H:%M:%S"), device_label(&data.id));
                     }
                     crate::types::EventData::DeviceDisconnected(data) => {
-                        println!("Device disconnected: {}", device_label(&data.id));
+                        println!("[{}] Device disconnected: {}", Local::now().format("%H:%M:%S"), device_label(&data.id));
                     }
                     crate::types::EventData::DevicePauseOrResume(data) => {
                         match event.event_type.as_str() {
                             "DevicePaused" => {
-                                println!("Device paused: {}", device_label(&data.device))
+                                println!("[{}] Device paused: {}", Local::now().format("%H:%M:%S"), device_label(&data.device))
                             }
-                            _ => println!("Device resumed: {}", device_label(&data.device)),
+                            _ => println!("[{}] Device resumed: {}", Local::now().format("%H:%M:%S"), device_label(&data.device)),
                         }
                     }
                     _ => {}
@@ -209,7 +210,8 @@ impl SyncThingClient {
                     // some error while syncing the item, skip it and print the error
                     if data.error.is_some() {
                         println!(
-                            "[{}] {} — skipping (error: {})",
+                            "[{}] [{}] {} — skipping (error: {})",
+                            Local::now().format("%H:%M:%S"),
                             data.folder,
                             data.item,
                             data.error.as_deref().unwrap()
