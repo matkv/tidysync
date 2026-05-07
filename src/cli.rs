@@ -13,7 +13,7 @@ pub struct CLI {
     #[arg(short, long, default_value = "http://localhost:8384")]
     pub url: String,
     #[arg(long, env = "SYNCTHING_API_KEY")]
-    pub api_key: String,
+    pub api_key: Option<String>,
     #[arg(long, value_name = "CONFIG_PATH")]
     pub config: Option<PathBuf>,
     #[command(subcommand)]

@@ -39,8 +39,16 @@ impl Config {
         config_path: &PathBuf,
         client: &SyncThingClient,
     ) -> Result<Self> {
+        if client.api_key.is_none() {
+            bail!(
+                "Config file not found at {} and no API key provided. \
+                Set SYNCTHING_API_KEY or pass --api-key to run the setup wizard.",
+                config_path.display()
+            );
+        }
+
         println!(
-            "Config file not found at {}. Creating a new one.",
+            "Config file not found at {}. Starting setup wizard.",
             config_path.display()
         );
 

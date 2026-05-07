@@ -8,12 +8,12 @@ use reqwest::Client;
 
 pub struct SyncThingClient {
     pub base_url: String,
-    pub api_key: String,
+    pub api_key: Option<String>,
     client: Client,
 }
 
 impl SyncThingClient {
-    pub fn new(base_url: String, api_key: String) -> Self {
+    pub fn new(base_url: String, api_key: Option<String>) -> Self {
         Self {
             base_url,
             api_key,
@@ -21,12 +21,18 @@ impl SyncThingClient {
         }
     }
 
+    fn require_api_key(&self) -> Result<&str> {
+        self.api_key
+            .as_deref()
+            .context("API key is required — set SYNCTHING_API_KEY or pass --api-key")
+    }
+
     pub async fn ping(&self) -> Result<()> {
         let url = format!("{}/rest/system/ping", self.base_url);
 
         self.client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.require_api_key()?)
             .send()
             .await
             .context("failed to reach /rest/system/ping")?
@@ -41,7 +47,7 @@ impl SyncThingClient {
         let status = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.require_api_key()?)
             .send()
             .await
             .context("failed to reach /rest/system/status")?
@@ -58,7 +64,7 @@ impl SyncThingClient {
         let folders = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.require_api_key()?)
             .send()
             .await
             .context("failed to reach /rest/config/folders")?
@@ -75,7 +81,7 @@ impl SyncThingClient {
         let devices = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.require_api_key()?)
             .send()
             .await
             .context("failed to reach /rest/config/devices")?
@@ -98,7 +104,7 @@ impl SyncThingClient {
         let events = self
             .client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.require_api_key()?)
             .send()
             .await
             .context("failed to reach /rest/events for seeding")?
@@ -173,7 +179,7 @@ impl SyncThingClient {
             let events = self
                 .client
                 .get(&url)
-                .header("X-API-Key", &self.api_key)
+                .header("X-API-Key", self.require_api_key()?)
                 .send()
                 .await
                 .context("failed to reach /rest/events")?
