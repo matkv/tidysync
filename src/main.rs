@@ -14,6 +14,10 @@ async fn main() -> Result<()> {
     let args = CLI::parse();
     let syncthing = SyncThingClient::new(args.url, args.api_key);
 
+    if args.tray {
+        println!("Running in tray mode");
+    }
+
     let Some(command) = &args.command else {
         CLI::command().print_help()?;
         println!();

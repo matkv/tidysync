@@ -16,6 +16,8 @@ pub struct CLI {
     pub api_key: Option<String>,
     #[arg(long, value_name = "CONFIG_PATH")]
     pub config: Option<PathBuf>,
+    #[arg(long)]
+    pub tray: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
