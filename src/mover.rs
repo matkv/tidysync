@@ -2,6 +2,22 @@ use anyhow::Context;
 use chrono::Local;
 use std::path::Path;
 
+fn should_skip_file(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    // Skip Syncthing internal files
+    if file_name == ".stfolder" {
+        return true;
+    }
+
+    // Skip temporary files
+    if file_name.ends_with(".tmp") {
+        return true;
+    }
+
+    false
+}
+
 pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyhow::Result<()> {
     for entry in walkdir::WalkDir::new(source_root)
         .min_depth(1)
@@ -14,8 +30,7 @@ pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyho
             continue;
         }
 
-        // skip the Syncthing folder
-        if path.file_name().map(|n| n == ".stfolder").unwrap_or(false) {
+        if should_skip_file(path) {
             continue;
         }
 
@@ -36,6 +51,11 @@ pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyho
 }
 
 pub async fn move_file(src: &Path, dst: &std::path::PathBuf) -> anyhow::Result<()> {
+    if should_skip_file(src) {
+        println!("[{}] Skipping file: {}", Local::now().format("%H:%M:%S"), src.display());
+        return Ok(());
+    }
+
     println!("[{}] Moving file from {} to {}", Local::now().format("%H:%M:%S"), src.display(), dst.display());
 
     if let Some(parent) = dst.parent() {
