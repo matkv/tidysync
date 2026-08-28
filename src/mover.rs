@@ -15,6 +15,11 @@ fn should_skip_file(path: &Path) -> bool {
         return true;
     }
 
+    // Skip .nomedia marker files
+    if file_name == ".nomedia" {
+        return true;
+    }
+
     false
 }
 
