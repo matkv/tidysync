@@ -4,12 +4,38 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use reqwest::Client;
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+/// Event types the watcher subscribes to.
+///
+/// Syncthing's event IDs are per-filter: seeding the cursor with one filter and
+/// then polling with another yields IDs from a different sequence, which makes
+/// the poll miss events or block forever. Both call sites read this constant so
+/// they cannot drift apart.
+const EVENT_FILTER: &str =
+    "ItemFinished,DeviceConnected,DeviceDisconnected,DevicePaused,DeviceResumed";
+
+/// Backoff bounds for reconnecting to Syncthing after a failed poll.
+const RETRY_MIN: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(60);
 
 pub struct SyncThingClient {
     pub base_url: String,
     pub api_key: Option<String>,
     client: Client,
+}
+
+/// Syncthing stores folder paths with a literal `~/` prefix, which the OS will
+/// not expand for us.
+fn expand_home(path: &str) -> Result<std::path::PathBuf> {
+    match path.strip_prefix("~/") {
+        Some(rest) => {
+            let home = dirs::home_dir().context("could not determine home directory")?;
+            Ok(home.join(rest))
+        }
+        None => Ok(std::path::PathBuf::from(path)),
+    }
 }
 
 impl SyncThingClient {
@@ -93,12 +119,31 @@ impl SyncThingClient {
         Ok(devices)
     }
 
-    async fn latest_event_id(&self) -> Result<u64> {
-        // Fetch the most recent event using the same filter as the main loop.
-        // The event IDs are per-filter, so mixing filters would give us an ID
-        // from a different sequence and cause the main loop to miss events or block.
+    /// Fetch a batch of events, long-polling until Syncthing has something to say.
+    async fn fetch_events(&self, since: u64, api_key: &str) -> Result<Vec<SyncThingEvent>> {
         let url = format!(
-            "{}/rest/events?since=0&limit=1&events=ItemFinished,DeviceConnected,DeviceDisconnected,DevicePaused,DeviceResumed",
+            "{}/rest/events?events={EVENT_FILTER}&since={since}",
+            self.base_url
+        );
+
+        self.client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("failed to reach /rest/events")?
+            .error_for_status()
+            .context("Syncthing returned an error on events endpoint")?
+            .json::<Vec<SyncThingEvent>>()
+            .await
+            .context("failed to parse events")
+    }
+
+    async fn latest_event_id(&self) -> Result<u64> {
+        // Fetch the most recent event using the same filter as the main loop —
+        // see EVENT_FILTER.
+        let url = format!(
+            "{}/rest/events?since=0&limit=1&events={EVENT_FILTER}",
             self.base_url
         );
         let events = self
@@ -153,12 +198,7 @@ impl SyncThingClient {
                 )
             })?;
 
-        let expanded_root = if let Some(rest) = source_folder.path.strip_prefix("~/") {
-            let home = dirs::home_dir().context("could not determine home directory")?;
-            home.join(rest)
-        } else {
-            std::path::PathBuf::from(&source_folder.path)
-        };
+        let expanded_root = expand_home(&source_folder.path)?;
 
         info!(
             "Scanning for existing files in {}...",
@@ -172,23 +212,31 @@ impl SyncThingClient {
         let mut since: u64 = self.latest_event_id().await?;
         debug!("Seeded event cursor at {since}");
 
+        // Resolved once, up front: a missing API key is a configuration problem
+        // rather than a transient one, so it must not be swallowed by the retry
+        // loop below and turned into an endless reconnect.
+        let api_key = self.require_api_key()?.to_string();
+
+        let mut backoff = RETRY_MIN;
+
         loop {
-            let url = format!(
-                "{}/rest/events?events=ItemFinished,DeviceConnected,DeviceDisconnected,DevicePaused,DeviceResumed&since={}",
-                self.base_url, since
-            );
-            let events = self
-                .client
-                .get(&url)
-                .header("X-API-Key", self.require_api_key()?)
-                .send()
-                .await
-                .context("failed to reach /rest/events")?
-                .error_for_status()
-                .context("Syncthing returned an error on events endpoint")?
-                .json::<Vec<SyncThingEvent>>()
-                .await
-                .context("failed to parse events")?;
+            let events = match self.fetch_events(since, &api_key).await {
+                Ok(events) => {
+                    backoff = RETRY_MIN;
+                    events
+                }
+                Err(err) => {
+                    // Syncthing restarting or the network dropping should not be
+                    // fatal — the watcher has to outlive both.
+                    warn!(
+                        "Event poll failed, retrying in {}s: {err:#}",
+                        backoff.as_secs()
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(RETRY_MAX);
+                    continue;
+                }
+            };
 
             debug!("Received {} event(s) since {}", events.len(), since);
 
@@ -225,33 +273,34 @@ impl SyncThingClient {
                         continue;
                     }
 
-                    let folder_root = folders
-                        .iter()
-                        .find(|f| f.id == data.folder)
-                        .map(|f| &f.path)
-                        .context("received event for unknown folder")?;
+                    let Some(folder_root) = folders.iter().find(|f| f.id == data.folder) else {
+                        warn!(
+                            "Received event for unknown folder '{}', skipping",
+                            data.folder
+                        );
+                        continue;
+                    };
 
-                    let expanded_root = if let Some(rest) = folder_root.strip_prefix("~/") {
-                        let home =
-                            dirs::home_dir().context("could not determine home directory")?;
-                        home.join(rest)
-                    } else {
-                        std::path::PathBuf::from(folder_root)
+                    let expanded_root = match expand_home(&folder_root.path) {
+                        Ok(root) => root,
+                        Err(err) => {
+                            warn!("Could not resolve path for '{}': {err:#}", data.folder);
+                            continue;
+                        }
                     };
 
                     let source = expanded_root.join(&data.item);
                     let destination = target_directory.join(&data.item);
 
-                    // move the file to the target directory
-                    mover::move_file(&source, &destination)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to move file {} to {}",
-                                data.item,
-                                destination.display()
-                            )
-                        })?;
+                    // A single unmovable file must not take the watcher down with
+                    // it — log and move on to the next event.
+                    if let Err(err) = mover::move_file(&source, &destination).await {
+                        warn!(
+                            "Failed to move {} to {}: {err:#}",
+                            data.item,
+                            destination.display()
+                        );
+                    }
                 }
             }
 
