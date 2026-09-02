@@ -12,8 +12,42 @@ mod config;
 mod lockfile;
 mod logging;
 mod mover;
+mod tray;
 mod types;
 mod watcher;
+
+/// Run headless with a tray icon instead of a terminal.
+async fn run_tray(syncthing: SyncThingClient, config_path: Option<&std::path::Path>) -> Result<()> {
+    let _lock = lockfile::WatchLock::acquire()?;
+
+    // There is no terminal to prompt on, so refuse rather than hanging on stdin
+    // waiting for answers nobody can give.
+    if !Config::exists(config_path)? {
+        anyhow::bail!("no config yet — run `tidysync config` once before using tray mode");
+    }
+
+    let config = Config::load(config_path, &syncthing).await?;
+    config.validate()?;
+
+    let url = syncthing.base_url.clone();
+    let watcher = watcher::WatcherHandle::spawn(Arc::new(syncthing), Arc::new(config), true);
+
+    let (quit_tx, mut quit_rx) = tokio::sync::mpsc::unbounded_channel();
+    let tray_thread = tray::spawn(watcher.control(), url, quit_tx);
+
+    tokio::select! {
+        _ = quit_rx.recv() => tracing::info!("Quit from tray"),
+        result = tokio::signal::ctrl_c() => {
+            result.context("failed to listen for ctrl-c")?;
+            tracing::info!("Interrupted");
+        }
+    }
+
+    watcher.shutdown().await;
+    let _ = tray_thread.join();
+
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +58,7 @@ async fn main() -> Result<()> {
     let syncthing = SyncThingClient::new(args.url, api_key);
 
     if args.tray {
-        println!("Running in tray mode");
+        return run_tray(syncthing, args.config.as_deref()).await;
     }
 
     let Some(command) = &args.command else {
@@ -65,16 +99,7 @@ async fn main() -> Result<()> {
             let _lock = lockfile::WatchLock::acquire()?;
 
             let config = Config::load(args.config.as_deref(), &syncthing).await?;
-
-            if !config.target_directory.is_absolute() {
-                anyhow::bail!(
-                    "target directory must be an absolute path, got: {}",
-                    config.target_directory.display()
-                );
-            }
-
-            std::fs::create_dir_all(&config.target_directory)
-                .context("failed to create target directory")?;
+            config.validate()?;
 
             tracing::info!(
                 "Watching for changes in folder ID: {}, moving files to: {}",

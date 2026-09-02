@@ -23,6 +23,17 @@ pub enum WatchState {
     Failed,
 }
 
+impl WatchState {
+    pub fn label(self) -> &'static str {
+        match self {
+            WatchState::Paused => "Paused",
+            WatchState::Scanning => "Scanning",
+            WatchState::Watching => "Watching",
+            WatchState::Failed => "Error",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Status {
     pub state: WatchState,
@@ -83,10 +94,50 @@ impl StatusHandle {
     }
 }
 
+/// What the supervisor should be doing.
+///
+/// Shutdown is a distinct signal rather than "everyone dropped the sender", so
+/// stopping works no matter how many controls the tray is still holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Signal {
+    Running,
+    Paused,
+    Shutdown,
+}
+
+/// A clonable remote control for the watcher.
+///
+/// Every method is synchronous, so the tray thread can drive it directly
+/// without a tokio runtime of its own.
+#[derive(Clone)]
+pub struct WatcherControl {
+    signal: watch::Sender<Signal>,
+    status: StatusHandle,
+}
+
+impl WatcherControl {
+    pub fn status(&self) -> Status {
+        self.status.get()
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        *self.signal.borrow() == Signal::Running
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        // Send failure only means the supervisor is gone, which the caller is
+        // about to notice anyway.
+        let _ = self.signal.send(if enabled {
+            Signal::Running
+        } else {
+            Signal::Paused
+        });
+    }
+}
+
 /// Owns the background watch task and the switch that turns it on and off.
 pub struct WatcherHandle {
-    enabled: watch::Sender<bool>,
-    status: StatusHandle,
+    control: WatcherControl,
     task: JoinHandle<()>,
 }
 
@@ -94,39 +145,34 @@ impl WatcherHandle {
     /// Start the supervisor. `enabled` decides whether it begins watching
     /// immediately or sits paused.
     pub fn spawn(client: Arc<SyncThingClient>, config: Arc<Config>, enabled: bool) -> Self {
-        let (tx, rx) = watch::channel(enabled);
+        let start = if enabled {
+            Signal::Running
+        } else {
+            Signal::Paused
+        };
+
+        let (tx, rx) = watch::channel(start);
         let status = StatusHandle::new();
         let task = tokio::spawn(supervise(client, config, rx, status.clone()));
 
         Self {
-            enabled: tx,
-            status,
+            control: WatcherControl { signal: tx, status },
             task,
         }
     }
 
+    pub fn control(&self) -> WatcherControl {
+        self.control.clone()
+    }
+
     pub fn status(&self) -> Status {
-        self.status.get()
+        self.control.status()
     }
 
-    // The toggle this whole supervisor exists to make possible. Nothing drives
-    // it until tray mode lands; the CLI always runs enabled.
-    #[allow(dead_code)]
-    pub fn is_enabled(&self) -> bool {
-        *self.enabled.borrow()
-    }
-
-    #[allow(dead_code)]
-    pub fn set_enabled(&self, enabled: bool) {
-        // Send failure only means the supervisor is gone, which the caller is
-        // about to notice anyway.
-        let _ = self.enabled.send(enabled);
-    }
-
-    /// Switch off and wait for the supervisor to notice, so we do not exit while
-    /// a file is mid-move. Gives up after a few seconds rather than hanging.
+    /// Stop and wait for the supervisor to finish the batch it is on, so we
+    /// never exit mid-move. Gives up after a few seconds rather than hanging.
     pub async fn shutdown(self) {
-        drop(self.enabled);
+        let _ = self.control.signal.send(Signal::Shutdown);
 
         if tokio::time::timeout(Duration::from_secs(5), self.task)
             .await
@@ -145,60 +191,66 @@ impl WatcherHandle {
 async fn supervise(
     client: Arc<SyncThingClient>,
     config: Arc<Config>,
-    mut enabled: watch::Receiver<bool>,
+    mut signal: watch::Receiver<Signal>,
     status: StatusHandle,
 ) {
     loop {
-        if !*enabled.borrow() {
-            status.set_state(WatchState::Paused);
-            debug!("Watcher paused");
+        // Bound before matching: holding the watch guard across the arms would
+        // conflict with the mutable borrow the session below needs.
+        let current = *signal.borrow();
 
-            // Err means every sender is gone, i.e. we are shutting down.
-            if enabled.wait_for(|on| *on).await.is_err() {
-                return;
+        match current {
+            Signal::Shutdown => return,
+            Signal::Running => {}
+            Signal::Paused => {
+                status.set_state(WatchState::Paused);
+                debug!("Watcher paused");
+
+                // Err means the handle is gone, i.e. we are shutting down.
+                if signal.wait_for(|s| *s != Signal::Paused).await.is_err() {
+                    return;
+                }
+
+                if *signal.borrow() == Signal::Shutdown {
+                    return;
+                }
+
+                info!("Watching resumed");
             }
-
-            info!("Watching resumed");
         }
 
         let session = client
             .watch_events(
                 &config.source_folder_id,
                 &config.target_directory,
-                &mut enabled,
+                &mut signal,
                 &status,
             )
             .await;
 
-        match session {
-            // Returned because the watcher was switched off or dropped.
-            Ok(()) => {
-                if enabled.has_changed().is_err() {
-                    return;
-                }
-            }
-            Err(err) => {
-                warn!("Watch session failed: {err:#}");
-                status.set_failed(format!("{err:#}"));
+        if let Err(err) = session {
+            warn!("Watch session failed: {err:#}");
+            status.set_failed(format!("{err:#}"));
 
-                // Back off before retrying, but wake immediately if toggled.
-                tokio::select! {
-                    _ = tokio::time::sleep(RESTART_DELAY) => {}
-                    result = enabled.changed() => {
-                        if result.is_err() {
-                            return;
-                        }
+            // Back off before retrying, but wake immediately if toggled.
+            tokio::select! {
+                _ = tokio::time::sleep(RESTART_DELAY) => {}
+                result = signal.changed() => {
+                    if result.is_err() {
+                        return;
                     }
                 }
             }
         }
+        // On Ok the session was cancelled; loop back round and re-read the
+        // signal, which decides whether we park or restart.
     }
 }
 
-/// Resolves when the watcher is switched off, or when its handle is dropped.
+/// Resolves when the watcher is switched off or shut down.
 ///
 /// Used to cancel the long poll; callers must only await this at a point where
 /// abandoning the work in progress is safe.
-pub(crate) async fn stopped(enabled: &mut watch::Receiver<bool>) {
-    let _ = enabled.wait_for(|on| !*on).await;
+pub(crate) async fn stopped(signal: &mut watch::Receiver<Signal>) {
+    let _ = signal.wait_for(|s| *s != Signal::Running).await;
 }

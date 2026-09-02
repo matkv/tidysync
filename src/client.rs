@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
-use crate::watcher::{StatusHandle, WatchState, stopped};
+use crate::watcher::{Signal, StatusHandle, WatchState, stopped};
 
 /// Event types the watcher subscribes to.
 ///
@@ -177,7 +177,7 @@ impl SyncThingClient {
         &self,
         source_folder_id: &str,
         target_directory: &std::path::Path,
-        enabled: &mut watch::Receiver<bool>,
+        signal: &mut watch::Receiver<Signal>,
         status: &StatusHandle,
     ) -> Result<()> {
         let devices = self
@@ -221,12 +221,14 @@ impl SyncThingClient {
         status.set_state(WatchState::Scanning);
 
         let swept = {
-            // `enabled` is borrowed mutably by the poll loop below, so the
+            // `signal` is borrowed mutably by the poll loop below, so the
             // cancellation check here reads through a cheap clone instead.
-            let cancel = enabled.clone();
-            mover::move_existing_files(&expanded_root, target_directory, || *cancel.borrow())
-                .await
-                .context("pre-scan move failed")?
+            let cancel = signal.clone();
+            mover::move_existing_files(&expanded_root, target_directory, || {
+                *cancel.borrow() == Signal::Running
+            })
+            .await
+            .context("pre-scan move failed")?
         };
         status.record_moves(swept);
 
@@ -249,7 +251,7 @@ impl SyncThingClient {
             // the watcher off can never interrupt a file mid-move.
             let poll = tokio::select! {
                 result = self.fetch_events(since, &api_key) => result,
-                _ = stopped(enabled) => {
+                _ = stopped(signal) => {
                     debug!("Watch session cancelled");
                     return Ok(());
                 }
@@ -271,7 +273,7 @@ impl SyncThingClient {
 
                     tokio::select! {
                         _ = tokio::time::sleep(backoff) => {}
-                        _ = stopped(enabled) => {
+                        _ = stopped(signal) => {
                             debug!("Watch session cancelled while backing off");
                             return Ok(());
                         }
