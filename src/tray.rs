@@ -10,12 +10,22 @@ use tracing::{debug, error, info};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
+use crate::logging::TrayLogging;
 use crate::watcher::{WatchState, WatcherControl};
 
 /// How often the tray thread checks for menu clicks and status changes.
 const REFRESH: Duration = Duration::from_millis(200);
 
 const ICON_SIZE: u32 = 32;
+
+/// Most recent log lines to show in the menu.
+const RECENT_ROWS: usize = 10;
+
+/// Index of the first recent row: status, separator, toggle, separator, header.
+const RECENT_START: usize = 5;
+
+/// Longest menu label before eliding; keeps the menu a sane width.
+const MAX_LABEL: usize = 60;
 
 /// Start the tray on its own thread.
 ///
@@ -28,12 +38,13 @@ const ICON_SIZE: u32 = 32;
 pub fn spawn(
     control: WatcherControl,
     syncthing_url: String,
+    logging: TrayLogging,
     quit: mpsc::UnboundedSender<()>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("tray".to_owned())
         .spawn(move || {
-            if let Err(err) = run(control, syncthing_url, &quit) {
+            if let Err(err) = run(control, syncthing_url, &logging, &quit) {
                 error!("Tray failed: {err:#}");
                 // Without a tray there is no way to drive the app, so bring the
                 // whole process down rather than watching on invisibly.
@@ -43,13 +54,28 @@ pub fn spawn(
         .expect("failed to spawn tray thread")
 }
 
-fn run(control: WatcherControl, syncthing_url: String, quit: &mpsc::UnboundedSender<()>) -> Result<()> {
+fn run(
+    control: WatcherControl,
+    syncthing_url: String,
+    logging: &TrayLogging,
+    quit: &mpsc::UnboundedSender<()>,
+) -> Result<()> {
     gtk::init().context("failed to initialise GTK for the tray icon")?;
 
     let status_item = MenuItem::new("Starting…", false, None);
     let toggle = CheckMenuItem::new("Watch enabled", true, control.is_enabled(), None);
+    let recent_header = MenuItem::new("Recent", false, None);
     let open_ui = MenuItem::new("Open Syncthing UI", true, None);
+    let open_log = MenuItem::new("Open log file", true, None);
     let quit_item = MenuItem::new("Quit", true, None);
+
+    // muda has no way to hide a menu item, so rather than padding the menu with
+    // blank rows these are inserted one at a time as the buffer fills. The ring
+    // only ever grows, so items are never removed again.
+    let recent_items: Vec<MenuItem> = (0..RECENT_ROWS)
+        .map(|_| MenuItem::new("", false, None))
+        .collect();
+    let mut recent_shown = 0usize;
 
     let menu = Menu::new();
     menu.append_items(&[
@@ -57,10 +83,17 @@ fn run(control: WatcherControl, syncthing_url: String, quit: &mpsc::UnboundedSen
         &PredefinedMenuItem::separator(),
         &toggle,
         &PredefinedMenuItem::separator(),
+        &recent_header,
+        &PredefinedMenuItem::separator(),
         &open_ui,
+        &open_log,
         &quit_item,
     ])
     .context("failed to build tray menu")?;
+
+    // Menu is a cheap handle, so keeping a clone lets us add rows later while
+    // the tray owns the menu itself.
+    let menu_handle = menu.clone();
 
     // The tray icon must outlive the event loop; dropping it removes the icon.
     let tray = TrayIconBuilder::new()
@@ -72,11 +105,15 @@ fn run(control: WatcherControl, syncthing_url: String, quit: &mpsc::UnboundedSen
 
     let toggle_id = toggle.id().clone();
     let open_ui_id = open_ui.id().clone();
+    let open_log_id = open_log.id().clone();
     let quit_id = quit_item.id().clone();
 
     let quit = quit.clone();
+    let recent = logging.recent.clone();
+    let log_path = logging.log_path.clone();
     let mut last_generation = u64::MAX;
     let mut last_state = None;
+    let mut last_recent: Vec<String> = Vec::new();
 
     glib::timeout_add_local(REFRESH, move || {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
@@ -89,12 +126,37 @@ fn run(control: WatcherControl, syncthing_url: String, quit: &mpsc::UnboundedSen
                 if let Err(err) = open::that_detached(&syncthing_url) {
                     error!("Could not open {syncthing_url}: {err}");
                 }
+            } else if event.id == open_log_id {
+                if let Err(err) = open::that_detached(&log_path) {
+                    error!("Could not open {}: {err}", log_path.display());
+                }
             } else if event.id == quit_id {
                 debug!("Quit selected");
                 let _ = quit.send(());
                 gtk::main_quit();
                 return glib::ControlFlow::Break;
             }
+        }
+
+        // The recent lines change independently of watcher status (device
+        // connects, poll retries), so they get their own comparison.
+        let lines = recent.lines();
+        if lines != last_recent {
+            // Newest first reads better in a menu that hangs off the tray.
+            for (row, line) in lines.iter().rev().enumerate() {
+                if row >= recent_shown {
+                    // Insert just after the "Recent" header.
+                    if let Err(err) = menu_handle.insert(&recent_items[row], RECENT_START + row) {
+                        error!("Could not grow the recent list: {err}");
+                        break;
+                    }
+                    recent_shown = row + 1;
+                }
+
+                recent_items[row].set_text(elide(line));
+            }
+
+            last_recent = lines;
         }
 
         let status = control.status();
@@ -134,20 +196,23 @@ fn run(control: WatcherControl, syncthing_url: String, quit: &mpsc::UnboundedSen
 
 fn status_line(status: &crate::watcher::Status) -> String {
     match (&status.last_error, status.state) {
-        (Some(error), WatchState::Failed) => format!("Error: {}", first_line(error)),
+        (Some(error), WatchState::Failed) => format!("Error: {}", elide(error)),
         (_, state) => format!("{} — {} moved", state.label(), status.moved),
     }
 }
 
-/// Menu items are single-line; an anyhow chain would blow the menu width out.
-fn first_line(message: &str) -> String {
+/// Menu labels are single-line and shouldn't stretch the menu across the screen;
+/// an anyhow chain or a long path would do both.
+fn elide(message: &str) -> String {
     let line = message.lines().next().unwrap_or_default();
-    if line.chars().count() > 60 {
-        format!("{}…", line.chars().take(59).collect::<String>())
+
+    if line.chars().count() > MAX_LABEL {
+        format!("{}…", line.chars().take(MAX_LABEL - 1).collect::<String>())
     } else {
         line.to_owned()
     }
 }
+
 
 /// Build the tray icon as raw RGBA.
 ///
@@ -206,4 +271,31 @@ fn icon_for(state: WatchState) -> Result<Icon> {
     }
 
     Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).context("failed to build tray icon from pixels")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elide_keeps_short_lines_intact() {
+        assert_eq!(elide("Moved report.pdf"), "Moved report.pdf");
+    }
+
+    #[test]
+    fn elide_truncates_and_takes_only_the_first_line() {
+        let long = "x".repeat(100);
+        let elided = elide(&long);
+        assert_eq!(elided.chars().count(), MAX_LABEL);
+        assert!(elided.ends_with('…'));
+
+        assert_eq!(elide("first\nsecond"), "first");
+    }
+
+    #[test]
+    fn elide_counts_characters_not_bytes() {
+        // Multi-byte input must not panic on a byte-boundary slice.
+        let wide = "é".repeat(100);
+        assert_eq!(elide(&wide).chars().count(), MAX_LABEL);
+    }
 }

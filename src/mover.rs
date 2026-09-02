@@ -82,7 +82,7 @@ pub async fn move_file(src: &Path, dst: &Path) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
-    info!("Moving file from {} to {}", src.display(), dst.display());
+    debug!("Moving {} to {}", src.display(), dst.display());
 
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)
@@ -90,12 +90,26 @@ pub async fn move_file(src: &Path, dst: &Path) -> anyhow::Result<bool> {
     }
 
     match std::fs::rename(src, dst) {
-        Ok(()) => Ok(true),
+        Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
-            copy_across_devices(src, dst).await.map(|()| true)
+            copy_across_devices(src, dst).await?
         }
-        Err(err) => Err(err).context("failed to move file"),
+        Err(err) => return Err(err).context("failed to move file"),
     }
+
+    // Logged after the fact, and by name rather than by full path: this line is
+    // what shows up in the tray menu, where a pair of absolute paths would be
+    // truncated into uselessness. Full paths are at debug above.
+    info!("Moved {}", display_name(src));
+
+    Ok(true)
+}
+
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// `rename` only works within one filesystem. When the source folder and the

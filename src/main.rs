@@ -17,7 +17,11 @@ mod types;
 mod watcher;
 
 /// Run headless with a tray icon instead of a terminal.
-async fn run_tray(syncthing: SyncThingClient, config_path: Option<&std::path::Path>) -> Result<()> {
+async fn run_tray(
+    syncthing: SyncThingClient,
+    config_path: Option<&std::path::Path>,
+    logging: logging::TrayLogging,
+) -> Result<()> {
     let _lock = lockfile::WatchLock::acquire()?;
 
     // There is no terminal to prompt on, so refuse rather than hanging on stdin
@@ -33,7 +37,7 @@ async fn run_tray(syncthing: SyncThingClient, config_path: Option<&std::path::Pa
     let watcher = watcher::WatcherHandle::spawn(Arc::new(syncthing), Arc::new(config), true);
 
     let (quit_tx, mut quit_rx) = tokio::sync::mpsc::unbounded_channel();
-    let tray_thread = tray::spawn(watcher.control(), url, quit_tx);
+    let tray_thread = tray::spawn(watcher.control(), url, logging, quit_tx);
 
     tokio::select! {
         _ = quit_rx.recv() => tracing::info!("Quit from tray"),
@@ -51,14 +55,22 @@ async fn run_tray(syncthing: SyncThingClient, config_path: Option<&std::path::Pa
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    logging::init();
-
     let args = CLI::parse();
+
+    // Tray mode adds the menu buffer and a log file on top of stdout, and a
+    // subscriber can only be installed once, so the mode has to be known first.
+    let tray_logging = if args.tray {
+        Some(logging::init_tray()?)
+    } else {
+        logging::init();
+        None
+    };
+
     let api_key = apikey::resolve(args.api_key);
     let syncthing = SyncThingClient::new(args.url, api_key);
 
-    if args.tray {
-        return run_tray(syncthing, args.config.as_deref()).await;
+    if let Some(logging) = tray_logging {
+        return run_tray(syncthing, args.config.as_deref(), logging).await;
     }
 
     let Some(command) = &args.command else {
