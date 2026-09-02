@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -78,6 +78,26 @@ pub struct TrayLogging {
     _guard: WorkerGuard,
 }
 
+/// Empty the log file, and the menu's view of it.
+///
+/// Truncates rather than deletes. The appender holds this file open, so
+/// unlinking it would leave the writer appending to an inode nothing can read
+/// any more, and every later line would vanish silently until restart. The
+/// appender opens with `O_APPEND`, so after truncation writes simply resume at
+/// the start of the file.
+pub fn clear_log(path: &Path, recent: &RecentLog) -> Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("failed to clear {}", path.display()))?;
+
+    recent.clear();
+
+    Ok(())
+}
+
 fn stdout_layer<S>() -> fmt::Layer<S, fmt::format::DefaultFields, fmt::format::Format<fmt::format::Full, ChronoLocal>>
 where
     S: tracing::Subscriber,
@@ -123,6 +143,12 @@ struct Buffer {
 }
 
 impl RecentLog {
+    pub fn clear(&self) {
+        let mut buffer = self.0.lock().expect("recent log mutex poisoned");
+        buffer.lines.clear();
+        buffer.pending.clear();
+    }
+
     /// Oldest first.
     pub fn lines(&self) -> Vec<String> {
         self.0
@@ -214,6 +240,32 @@ mod tests {
 
         log.write_all(b"\n").unwrap();
         assert_eq!(log.lines(), vec!["Moved report.pdf"]);
+    }
+
+    #[test]
+    fn clear_log_empties_both_the_file_and_the_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tidysync.log");
+        std::fs::write(&path, "an old line\n").unwrap();
+
+        let mut recent = RecentLog::default();
+        writeln!(recent, "an old line").unwrap();
+        assert_eq!(recent.lines().len(), 1);
+
+        clear_log(&path, &recent).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        assert!(recent.lines().is_empty());
+    }
+
+    #[test]
+    fn clear_log_succeeds_when_the_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gone.log");
+
+        clear_log(&path, &RecentLog::default()).unwrap();
+
+        assert!(path.exists(), "clearing recreates the file");
     }
 
     #[test]

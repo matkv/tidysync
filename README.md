@@ -33,7 +33,7 @@ tidysync --tray    # system tray icon
 
 The tray menu shows the current state and how many files have been moved, a checkbox to
 pause and resume watching, the last few log lines, and shortcuts to open the Syncthing web
-UI and the log file.
+UI, open the log file, and clear it.
 
 Pausing stops files being moved. Resuming re-scans the source folder, so anything Syncthing
 delivered while you were paused gets swept up then.

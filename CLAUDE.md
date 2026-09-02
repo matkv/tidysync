@@ -96,7 +96,9 @@ GTK needs an event loop, and the tray must be built on whichever thread runs it 
 
 `tray-icon` is depended on with `default-features = false, features = ["gtk"]` — the default `libxdo` feature only powers predefined Copy/Cut/Paste items, which we don't use, and requires `xdotool` to be installed. `glib` is used via `gtk::glib` rather than as its own dependency so the versions cannot drift. `muda` comes through `tray_icon::menu`.
 
-muda has no `set_visible`, so the "Recent" rows are inserted as the ring buffer fills rather than padded with blanks.
+muda has no `set_visible`, so the "Recent" rows are inserted as the ring buffer fills rather than padded with blanks, and removed again if the count drops (which only "Clear log file" causes).
+
+"Clear log file" **truncates**, never deletes. `tracing-appender` holds the file open, so unlinking it would leave the writer appending to an unreachable inode and every later line would vanish until restart. It opens with `O_APPEND`, so writes resume at offset 0 after truncation — verified, no sparse hole.
 
 ### Config first-run wizard (`config.rs`)
 `Config::load` prompts interactively on stdin when the file is missing. Tray mode has no terminal, so it calls `Config::exists` first and bails with a message rather than hanging. Config is stored at `~/.config/tidysync/config.toml` on Linux. Schema is flat — single `source_folder_id` + `target_directory`.

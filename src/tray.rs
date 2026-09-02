@@ -67,6 +67,7 @@ fn run(
     let recent_header = MenuItem::new("Recent", false, None);
     let open_ui = MenuItem::new("Open Syncthing UI", true, None);
     let open_log = MenuItem::new("Open log file", true, None);
+    let clear_log = MenuItem::new("Clear log file", true, None);
     let quit_item = MenuItem::new("Quit", true, None);
 
     // muda has no way to hide a menu item, so rather than padding the menu with
@@ -87,6 +88,7 @@ fn run(
         &PredefinedMenuItem::separator(),
         &open_ui,
         &open_log,
+        &clear_log,
         &quit_item,
     ])
     .context("failed to build tray menu")?;
@@ -106,6 +108,7 @@ fn run(
     let toggle_id = toggle.id().clone();
     let open_ui_id = open_ui.id().clone();
     let open_log_id = open_log.id().clone();
+    let clear_log_id = clear_log.id().clone();
     let quit_id = quit_item.id().clone();
 
     let quit = quit.clone();
@@ -130,6 +133,12 @@ fn run(
                 if let Err(err) = open::that_detached(&log_path) {
                     error!("Could not open {}: {err}", log_path.display());
                 }
+            } else if event.id == clear_log_id {
+                match crate::logging::clear_log(&log_path, &recent) {
+                    // Logged after clearing, so the menu shows why it emptied.
+                    Ok(()) => info!("Log file cleared"),
+                    Err(err) => error!("Could not clear the log file: {err:#}"),
+                }
             } else if event.id == quit_id {
                 debug!("Quit selected");
                 let _ = quit.send(());
@@ -142,17 +151,29 @@ fn run(
         // connects, poll retries), so they get their own comparison.
         let lines = recent.lines();
         if lines != last_recent {
-            // Newest first reads better in a menu that hangs off the tray.
-            for (row, line) in lines.iter().rev().enumerate() {
-                if row >= recent_shown {
-                    // Insert just after the "Recent" header.
-                    if let Err(err) = menu_handle.insert(&recent_items[row], RECENT_START + row) {
-                        error!("Could not grow the recent list: {err}");
-                        break;
-                    }
-                    recent_shown = row + 1;
+            // Match the number of visible rows to the number of lines. Normally
+            // this only grows as the buffer fills; clearing the log is the one
+            // thing that shrinks it.
+            while recent_shown < lines.len() {
+                if let Err(err) =
+                    menu_handle.insert(&recent_items[recent_shown], RECENT_START + recent_shown)
+                {
+                    error!("Could not grow the recent list: {err}");
+                    break;
                 }
+                recent_shown += 1;
+            }
 
+            while recent_shown > lines.len() {
+                if let Err(err) = menu_handle.remove(&recent_items[recent_shown - 1]) {
+                    error!("Could not shrink the recent list: {err}");
+                    break;
+                }
+                recent_shown -= 1;
+            }
+
+            // Newest first reads better in a menu that hangs off the tray.
+            for (row, line) in lines.iter().rev().enumerate().take(recent_shown) {
                 recent_items[row].set_text(elide(line));
             }
 
