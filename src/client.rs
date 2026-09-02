@@ -5,7 +5,10 @@ use crate::{
 use anyhow::{Context, Result};
 use reqwest::Client;
 use std::time::Duration;
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
+
+use crate::watcher::{StatusHandle, WatchState, stopped};
 
 /// Event types the watcher subscribes to.
 ///
@@ -165,10 +168,17 @@ impl SyncThingClient {
         Ok(events.last().map(|e| e.id).unwrap_or(0))
     }
 
+    /// Watch until the watcher is switched off, or until something unrecoverable
+    /// happens.
+    ///
+    /// Returns `Ok(())` when cancelled. Transient poll failures are retried
+    /// internally; only a failure to get started at all is returned as an error.
     pub async fn watch_events(
         &self,
         source_folder_id: &str,
         target_directory: &std::path::Path,
+        enabled: &mut watch::Receiver<bool>,
+        status: &StatusHandle,
     ) -> Result<()> {
         let devices = self
             .devices()
@@ -208,10 +218,20 @@ impl SyncThingClient {
             "Scanning for existing files in {}...",
             expanded_root.display()
         );
-        mover::move_existing_files(&expanded_root, target_directory)
-            .await
-            .context("pre-scan move failed")?;
-        info!("Pre-scan complete. Watching for new events...");
+        status.set_state(WatchState::Scanning);
+
+        let swept = {
+            // `enabled` is borrowed mutably by the poll loop below, so the
+            // cancellation check here reads through a cheap clone instead.
+            let cancel = enabled.clone();
+            mover::move_existing_files(&expanded_root, target_directory, || *cancel.borrow())
+                .await
+                .context("pre-scan move failed")?
+        };
+        status.record_moves(swept);
+
+        info!("Pre-scan complete ({swept} moved). Watching for new events...");
+        status.set_state(WatchState::Watching);
 
         let mut since: u64 = self.latest_event_id().await?;
         debug!("Seeded event cursor at {since}");
@@ -224,9 +244,21 @@ impl SyncThingClient {
         let mut backoff = RETRY_MIN;
 
         loop {
-            let events = match self.fetch_events(since, &api_key).await {
+            // Cancellation is only ever observed here, between batches. Once a
+            // batch starts being processed it runs to completion, so switching
+            // the watcher off can never interrupt a file mid-move.
+            let poll = tokio::select! {
+                result = self.fetch_events(since, &api_key) => result,
+                _ = stopped(enabled) => {
+                    debug!("Watch session cancelled");
+                    return Ok(());
+                }
+            };
+
+            let events = match poll {
                 Ok(events) => {
                     backoff = RETRY_MIN;
+                    status.set_state(WatchState::Watching);
                     events
                 }
                 Err(err) => {
@@ -236,7 +268,15 @@ impl SyncThingClient {
                         "Event poll failed, retrying in {}s: {err:#}",
                         backoff.as_secs()
                     );
-                    tokio::time::sleep(backoff).await;
+
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff) => {}
+                        _ = stopped(enabled) => {
+                            debug!("Watch session cancelled while backing off");
+                            return Ok(());
+                        }
+                    }
+
                     backoff = (backoff * 2).min(RETRY_MAX);
                     continue;
                 }
@@ -298,12 +338,14 @@ impl SyncThingClient {
 
                     // A single unmovable file must not take the watcher down with
                     // it — log and move on to the next event.
-                    if let Err(err) = mover::move_file(&source, &destination).await {
-                        warn!(
+                    match mover::move_file(&source, &destination).await {
+                        Ok(true) => status.record_moves(1),
+                        Ok(false) => {}
+                        Err(err) => warn!(
                             "Failed to move {} to {}: {err:#}",
                             data.item,
                             destination.display()
-                        );
+                        ),
                     }
                 }
             }

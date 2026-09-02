@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 
@@ -11,6 +13,7 @@ mod lockfile;
 mod logging;
 mod mover;
 mod types;
+mod watcher;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -79,9 +82,17 @@ async fn main() -> Result<()> {
                 config.target_directory.display()
             );
 
-            syncthing
-                .watch_events(&config.source_folder_id, &config.target_directory)
-                .await?;
+            let watcher =
+                watcher::WatcherHandle::spawn(Arc::new(syncthing), Arc::new(config), true);
+
+            tokio::signal::ctrl_c()
+                .await
+                .context("failed to listen for ctrl-c")?;
+
+            tracing::info!("Shutting down...");
+            let moved = watcher.status().moved;
+            watcher.shutdown().await;
+            tracing::info!("Moved {moved} file(s) this session");
         }
         cli::Command::Config => {
             let config = Config::load(args.config.as_deref(), &syncthing).await?; // TODO check what as_deref does

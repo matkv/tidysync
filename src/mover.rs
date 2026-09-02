@@ -23,12 +23,29 @@ fn should_skip_file(path: &Path) -> bool {
     false
 }
 
-pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyhow::Result<()> {
+/// Sweep everything already sitting in the source folder, returning how many
+/// files were moved.
+///
+/// `should_continue` is polled between files so a long backlog can be abandoned
+/// promptly when the watcher is switched off. It is checked between files rather
+/// than during one, so a move is never interrupted half-way.
+pub async fn move_existing_files(
+    source_root: &Path,
+    target_dir: &Path,
+    should_continue: impl Fn() -> bool,
+) -> anyhow::Result<u64> {
+    let mut moved = 0;
+
     for entry in walkdir::WalkDir::new(source_root)
         .min_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if !should_continue() {
+            debug!("Pre-scan cancelled after {moved} file(s)");
+            break;
+        }
+
         let path = entry.path();
 
         if path.is_dir() {
@@ -47,17 +64,22 @@ pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyho
 
         // One unreadable file shouldn't abort the whole pre-scan — log it and
         // carry on, otherwise a single permission error blocks startup entirely.
-        if let Err(err) = move_file(path, &destination).await {
-            warn!("Failed to move existing file {}: {err:#}", path.display());
+        match move_file(path, &destination).await {
+            Ok(true) => moved += 1,
+            Ok(false) => {}
+            Err(err) => warn!("Failed to move existing file {}: {err:#}", path.display()),
         }
     }
-    Ok(())
+
+    Ok(moved)
 }
 
-pub async fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+/// Move one file, returning whether it was actually moved (as opposed to
+/// deliberately skipped).
+pub async fn move_file(src: &Path, dst: &Path) -> anyhow::Result<bool> {
     if should_skip_file(src) {
         debug!("Skipping file: {}", src.display());
-        return Ok(());
+        return Ok(false);
     }
 
     info!("Moving file from {} to {}", src.display(), dst.display());
@@ -68,9 +90,9 @@ pub async fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
     }
 
     match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
-            copy_across_devices(src, dst).await
+            copy_across_devices(src, dst).await.map(|()| true)
         }
         Err(err) => Err(err).context("failed to move file"),
     }
@@ -126,10 +148,47 @@ mod tests {
         let dst = dir.path().join("target/report.pdf");
         write(&src, "hello");
 
-        move_file(&src, &dst).await.unwrap();
+        assert!(move_file(&src, &dst).await.unwrap(), "should report a move");
 
         assert!(!src.exists(), "source should be gone after a move");
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn reports_skipped_files_as_not_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join(".nomedia");
+        let dst = dir.path().join("target/.nomedia");
+        write(&src, "");
+
+        assert!(!move_file(&src, &dst).await.unwrap(), "should report a skip");
+        assert!(src.exists(), "a skipped file stays where it is");
+        assert!(!dst.exists());
+    }
+
+    #[tokio::test]
+    async fn pre_scan_counts_moves_and_honours_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            write(&source.join(name), "x");
+        }
+        // Skipped files must not be counted.
+        write(&source.join(".nomedia"), "");
+
+        let moved = move_existing_files(&source, &target, || true).await.unwrap();
+        assert_eq!(moved, 3);
+
+        // With the watcher switched off nothing should be swept at all.
+        for name in ["d.txt", "e.txt"] {
+            write(&source.join(name), "x");
+        }
+        let moved = move_existing_files(&source, &target, || false)
+            .await
+            .unwrap();
+        assert_eq!(moved, 0);
+        assert!(source.join("d.txt").exists());
     }
 
     /// Exercises the `EXDEV` fallback by moving between two different mounts.
@@ -155,7 +214,7 @@ mod tests {
         let dst = on_disk.path().join("nested/movie.mkv");
         write(&src, "some bytes");
 
-        move_file(&src, &dst).await.unwrap();
+        assert!(move_file(&src, &dst).await.unwrap(), "should report a move");
 
         assert!(!src.exists(), "source should be gone after a cross-device move");
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "some bytes");
