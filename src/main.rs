@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser};
 
 use crate::{cli::CLI, client::SyncThingClient, config::Config};
 
+mod apikey;
 mod cli;
 mod client;
 mod config;
@@ -15,7 +16,8 @@ async fn main() -> Result<()> {
     logging::init();
 
     let args = CLI::parse();
-    let syncthing = SyncThingClient::new(args.url, args.api_key);
+    let api_key = apikey::resolve(args.api_key);
+    let syncthing = SyncThingClient::new(args.url, api_key);
 
     if args.tray {
         println!("Running in tray mode");

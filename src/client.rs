@@ -50,7 +50,11 @@ impl SyncThingClient {
     fn require_api_key(&self) -> Result<&str> {
         self.api_key
             .as_deref()
-            .context("API key is required — set SYNCTHING_API_KEY or pass --api-key")
+            .context(
+                "API key is required — pass --api-key, set SYNCTHING_API_KEY \
+                 (in the environment or in ~/.env), or run Syncthing at least \
+                 once so its config.xml exists",
+            )
     }
 
     pub async fn ping(&self) -> Result<()> {
