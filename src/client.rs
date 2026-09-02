@@ -3,8 +3,8 @@ use crate::{
     types::{Device, Folder, SyncThingEvent, SystemStatus},
 };
 use anyhow::{Context, Result};
-use chrono::Local;
 use reqwest::Client;
+use tracing::{debug, info, warn};
 
 pub struct SyncThingClient {
     pub base_url: String,
@@ -160,16 +160,17 @@ impl SyncThingClient {
             std::path::PathBuf::from(&source_folder.path)
         };
 
-        println!(
+        info!(
             "Scanning for existing files in {}...",
             expanded_root.display()
         );
         mover::move_existing_files(&expanded_root, target_directory)
             .await
             .context("pre-scan move failed")?;
-        println!("[{}] Pre-scan complete. Watching for new events...", Local::now().format("%H:%M:%S"));
+        info!("Pre-scan complete. Watching for new events...");
 
         let mut since: u64 = self.latest_event_id().await?;
+        debug!("Seeded event cursor at {since}");
 
         loop {
             let url = format!(
@@ -189,20 +190,22 @@ impl SyncThingClient {
                 .await
                 .context("failed to parse events")?;
 
+            debug!("Received {} event(s) since {}", events.len(), since);
+
             for event in &events {
+                debug!("Event {} type={}", event.id, event.event_type);
+
                 match &event.data {
                     crate::types::EventData::DeviceConnected(data) => {
-                        println!("[{}] Device connected: {}", Local::now().format("%H:%M:%S"), device_label(&data.id));
+                        info!("Device connected: {}", device_label(&data.id));
                     }
                     crate::types::EventData::DeviceDisconnected(data) => {
-                        println!("[{}] Device disconnected: {}", Local::now().format("%H:%M:%S"), device_label(&data.id));
+                        info!("Device disconnected: {}", device_label(&data.id));
                     }
                     crate::types::EventData::DevicePauseOrResume(data) => {
                         match event.event_type.as_str() {
-                            "DevicePaused" => {
-                                println!("[{}] Device paused: {}", Local::now().format("%H:%M:%S"), device_label(&data.device))
-                            }
-                            _ => println!("[{}] Device resumed: {}", Local::now().format("%H:%M:%S"), device_label(&data.device)),
+                            "DevicePaused" => info!("Device paused: {}", device_label(&data.device)),
+                            _ => info!("Device resumed: {}", device_label(&data.device)),
                         }
                     }
                     _ => {}
@@ -214,13 +217,10 @@ impl SyncThingClient {
                     }
 
                     // some error while syncing the item, skip it and print the error
-                    if data.error.is_some() {
-                        println!(
-                            "[{}] [{}] {} — skipping (error: {})",
-                            Local::now().format("%H:%M:%S"),
-                            data.folder,
-                            data.item,
-                            data.error.as_deref().unwrap()
+                    if let Some(error) = &data.error {
+                        warn!(
+                            "[{}] {} — skipping (error: {})",
+                            data.folder, data.item, error
                         );
                         continue;
                     }

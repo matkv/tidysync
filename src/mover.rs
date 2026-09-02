@@ -1,6 +1,6 @@
 use anyhow::Context;
-use chrono::Local;
 use std::path::Path;
+use tracing::{debug, info};
 
 fn should_skip_file(path: &Path) -> bool {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -57,11 +57,11 @@ pub async fn move_existing_files(source_root: &Path, target_dir: &Path) -> anyho
 
 pub async fn move_file(src: &Path, dst: &std::path::PathBuf) -> anyhow::Result<()> {
     if should_skip_file(src) {
-        println!("[{}] Skipping file: {}", Local::now().format("%H:%M:%S"), src.display());
+        debug!("Skipping file: {}", src.display());
         return Ok(());
     }
 
-    println!("[{}] Moving file from {} to {}", Local::now().format("%H:%M:%S"), src.display(), dst.display());
+    info!("Moving file from {} to {}", src.display(), dst.display());
 
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)

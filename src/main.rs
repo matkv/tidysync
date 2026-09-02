@@ -6,11 +6,14 @@ use crate::{cli::CLI, client::SyncThingClient, config::Config};
 mod cli;
 mod client;
 mod config;
+mod logging;
 mod mover;
 mod types;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    logging::init();
+
     let args = CLI::parse();
     let syncthing = SyncThingClient::new(args.url, args.api_key);
 
@@ -62,7 +65,7 @@ async fn main() -> Result<()> {
             std::fs::create_dir_all(&config.target_directory)
                 .context("failed to create target directory")?;
 
-            println!(
+            tracing::info!(
                 "Watching for changes in folder ID: {}, moving files to: {}",
                 config.source_folder_id,
                 config.target_directory.display()
