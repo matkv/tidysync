@@ -2,6 +2,8 @@
 name = "tidysync"
 version = "0.1.0"
 edition = "2024"
+# std::fs::File::try_lock, used for the single-instance lock, stabilised in 1.89.
+rust-version = "1.89"
 
 [dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }

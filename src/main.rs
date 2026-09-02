@@ -7,6 +7,7 @@ mod apikey;
 mod cli;
 mod client;
 mod config;
+mod lockfile;
 mod logging;
 mod mover;
 mod types;
@@ -55,6 +56,11 @@ async fn main() -> Result<()> {
             }
         }
         cli::Command::Watch => {
+            // Held for the rest of the watch: a second watcher would race this
+            // one for every file. Taken before the config wizard so two fresh
+            // instances cannot both prompt on stdin.
+            let _lock = lockfile::WatchLock::acquire()?;
+
             let config = Config::load(args.config.as_deref(), &syncthing).await?;
 
             if !config.target_directory.is_absolute() {
