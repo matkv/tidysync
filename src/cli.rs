@@ -12,7 +12,14 @@ use clap::{Parser, Subcommand};
 pub struct CLI {
     #[arg(short, long, default_value = "http://localhost:8384")]
     pub url: String,
-    #[arg(long, env = "SYNCTHING_API_KEY")]
+    // hide_env_values stops `--help` from printing the key itself into the
+    // terminal (and into any pasted bug report) when the variable is set.
+    #[arg(
+        long,
+        env = "SYNCTHING_API_KEY",
+        hide_env_values = true,
+        help = "Syncthing API key. Falls back to ~/.env, then to Syncthing's own config.xml"
+    )]
     pub api_key: Option<String>,
     #[arg(long, value_name = "CONFIG_PATH")]
     pub config: Option<PathBuf>,

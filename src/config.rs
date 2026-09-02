@@ -21,11 +21,38 @@ impl Config {
         Ok(dir.join("tidysync").join("config.toml"))
     }
 
+    fn path_or_default(path: Option<&Path>) -> Result<PathBuf> {
+        match path {
+            Some(p) => Ok(p.to_path_buf()),
+            None => Self::default_path(),
+        }
+    }
+
+    /// Whether a config file is already present.
+    ///
+    /// Lets callers that cannot prompt — tray mode has no terminal — bail out
+    /// before `load` would start the interactive wizard.
+    pub fn exists(path: Option<&Path>) -> Result<bool> {
+        Ok(Self::path_or_default(path)?.exists())
+    }
+
+    /// Check the target directory is usable, creating it if it does not exist.
+    pub fn validate(&self) -> Result<()> {
+        if !self.target_directory.is_absolute() {
+            bail!(
+                "target directory must be an absolute path, got: {}",
+                self.target_directory.display()
+            );
+        }
+
+        fs::create_dir_all(&self.target_directory)
+            .context("failed to create target directory")?;
+
+        Ok(())
+    }
+
     pub async fn load(path: Option<&Path>, client: &SyncThingClient) -> Result<Self> {
-        let config_path = match path {
-            Some(p) => p.to_path_buf(),
-            None => Self::default_path()?,
-        };
+        let config_path = Self::path_or_default(path)?;
 
         if !config_path.exists() {
             return Self::create_new_config_file(&config_path, client).await;
