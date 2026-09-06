@@ -2,11 +2,29 @@ use anyhow::Context;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
+/// Directories Syncthing owns and we must never touch: the folder marker
+/// (`.stfolder`, a directory into which Syncthing writes a randomly-named file
+/// on some platforms) and the versioning store (`.stversions`).
+const SYNCTHING_DIRS: [&str; 2] = [".stfolder", ".stversions"];
+
 fn should_skip_file(path: &Path) -> bool {
+    use std::path::Component;
+
+    // Match on *any* path component, not just the basename: the offending file
+    // is usually one Syncthing itself dropped *inside* `.stfolder`, whose own
+    // name gives nothing away.
+    for component in path.components() {
+        if let Component::Normal(name) = component
+            && SYNCTHING_DIRS.iter().any(|d| name == *d)
+        {
+            return true;
+        }
+    }
+
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-    // Skip Syncthing internal files
-    if file_name == ".stfolder" {
+    // Skip Syncthing internal files (marker file variant, ignore list)
+    if file_name == ".stfolder" || file_name == ".stignore" {
         return true;
     }
 
@@ -39,6 +57,7 @@ pub async fn move_existing_files(
     for entry in walkdir::WalkDir::new(source_root)
         .min_depth(1)
         .into_iter()
+        .filter_entry(|e| !SYNCTHING_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
         .filter_map(|e| e.ok())
     {
         if !should_continue() {
@@ -205,9 +224,41 @@ mod tests {
         assert!(source.join("d.txt").exists());
     }
 
+    #[tokio::test]
+    async fn skips_files_inside_syncthing_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join(".stfolder/~syncthing~marker");
+        let dst = dir.path().join("target/.stfolder/~syncthing~marker");
+        write(&src, "");
+
+        assert!(
+            !move_file(&src, &dst).await.unwrap(),
+            "a file inside .stfolder must be skipped, not moved"
+        );
+        assert!(src.exists(), "the skipped file stays put");
+        assert!(!dst.exists());
+    }
+
+    #[tokio::test]
+    async fn pre_scan_never_descends_into_syncthing_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        write(&source.join("keep.txt"), "x");
+        write(&source.join(".stfolder/~syncthing~marker"), "");
+        write(&source.join(".stversions/old.txt"), "x");
+
+        let moved = move_existing_files(&source, &target, || true).await.unwrap();
+        assert_eq!(moved, 1, "only the real file should move");
+        assert!(source.join(".stfolder/~syncthing~marker").exists());
+        assert!(source.join(".stversions/old.txt").exists());
+    }
+
     /// Exercises the `EXDEV` fallback by moving between two different mounts.
     /// `std::env::temp_dir()` is often a tmpfs while the build directory sits on
     /// the real disk; if they happen to share a device there is nothing to test.
+    /// Unix-only: it relies on `st_dev` to tell the two mounts apart.
+    #[cfg(unix)]
     #[tokio::test]
     async fn moves_a_file_across_filesystems() {
         use std::os::unix::fs::MetadataExt;
